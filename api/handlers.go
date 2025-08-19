@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 
 	"intelligent-doc-assistant/internal/llm"
 	"intelligent-doc-assistant/internal/parser"
@@ -56,16 +58,30 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	repoPath := req.RepoPath
+	var err error
+
+	// If it's a GitHub URL, clone it first
+	if parser.IsGitHubURL(req.RepoPath) {
+		repoPath, err = s.Parser.CloneGitHubRepo(req.RepoPath)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to clone repository: %v", err))
+			return
+		}
+		// Clean up temp directory when we're done
+		defer os.RemoveAll(repoPath)
+	}
+
 	// Parse the codebase
-	chunks, err := s.Parser.Parse(req.RepoPath)
+	chunks, err := s.Parser.Parse(repoPath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to parse codebase")
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to parse codebase: %v", err))
 		return
 	}
 
 	// Store the chunks and their embeddings
 	if err := s.Storage.StoreChunks(r.Context(), chunks); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to store code chunks")
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to store code chunks: %v", err))
 		return
 	}
 

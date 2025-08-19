@@ -21,6 +21,7 @@ type CodeChunk struct {
 	FilePath    string
 	StartLine   int
 	EndLine     int
+	Content     string // The actual code snippet
 }
 
 // Parameter represents a function parameter
@@ -107,6 +108,9 @@ func (p *Parser) parseFile(path string) ([]CodeChunk, error) {
 		end := p.fset.Position(fn.End())
 		chunk.StartLine = start.Line
 		chunk.EndLine = end.Line
+
+		// Extract the function content
+		chunk.Content = string(src[start.Offset:end.Offset])
 
 		// Extract description and parameters from doc comments
 		if fn.Doc != nil {

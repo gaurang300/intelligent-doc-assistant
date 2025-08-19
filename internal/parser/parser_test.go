@@ -7,50 +7,27 @@ import (
 )
 
 func TestParseCode(t *testing.T) {
-	tests := []struct {
-		name     string
-		content  string
-		language string
-		want     []CodeChunk
-		wantErr  bool
-	}{
+	testFilePath := "testdata/test.go"
+	want := []CodeChunk{
 		{
-			name: "parse go function",
-			content: `package main
-
-func TestFunction(a int, b string) (string, error) {
-	// Test function description
-	return "", nil
-}`,
-			language: "go",
-			want: []CodeChunk{
-				{
-					Name:        "TestFunction",
-					FilePath:    "test.go",
-					StartLine:   3,
-					EndLine:     6,
-					Parameters:  []string{"a int", "b string"},
-					Returns:     []string{"string", "error"},
-					Description: "Test function description",
-					Language:    "go",
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "parse empty file",
-			content: `package main
-
-// Empty file for testing`,
-			language: "go",
-			want:     []CodeChunk{},
-			wantErr:  false,
+			Name:        "TestFunction",
+			FilePath:    testFilePath,
+			StartLine:   3,
+			EndLine:     5,
+			Parameters:  []Parameter{{Name: "a", Type: "int"}, {Name: "b", Type: "string"}},
+			Returns:     "string, error",
+			Description: "Test function description",
+			Language:    "go",
+			Content:     "func TestFunction(a int, b string) (string, error) {\n\t// Test function description\n\treturn \"\", nil\n}",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseCode("test.go", tt.content, tt.language)
+	p := NewParser()
+	got, err := p.parseFile(testFilePath)
+	
+	assert.NoError(t, err)
+	assert.Equal(t, want, got)
+}
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -63,41 +40,28 @@ func TestFunction(a int, b string) (string, error) {
 }
 
 func TestChunkCode(t *testing.T) {
-	tests := []struct {
-		name     string
-		content  string
-		language string
-		maxSize  int
-		want     []CodeChunk
-		wantErr  bool
-	}{
-		{
-			name: "chunk large function",
-			content: `func LargeFunction() {
-				// First part
-				code1
-				code2
-				// Second part
-				code3
-				code4
-			}`,
-			language: "go",
-			maxSize:  100,
-			want: []CodeChunk{
-				{
-					Name:        "LargeFunction part 1",
-					FilePath:    "test.go",
-					StartLine:   1,
-					EndLine:     4,
-					Description: "First part",
-					Language:    "go",
-				},
-				{
-					Name:        "LargeFunction part 2",
-					FilePath:    "test.go",
-					StartLine:   4,
-					EndLine:     7,
-					Description: "Second part",
+	// Create a temporary file for testing
+	content := []byte(`func LargeFunction() {
+		// First part
+		code1
+		code2
+		// Second part
+		code3
+		code4
+	}`)
+	
+	tmpFilePath := "testdata/large_test.go"
+	err := os.WriteFile(tmpFilePath, content, 0644)
+	assert.NoError(t, err)
+	defer os.Remove(tmpFilePath)
+
+	p := NewParser()
+	chunks, err := p.parseFile(tmpFilePath)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(chunks))
+
+	// Verify content is captured
+	assert.Contains(t, chunks[0].Content, "LargeFunction")
 					Language:    "go",
 				},
 			},

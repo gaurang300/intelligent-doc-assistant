@@ -55,7 +55,7 @@ func (c *Client) GenerateAnswer(ctx context.Context, question string, searchResu
 
 	// Create the generate content request
 	req := &pb.GenerateContentRequest{
-		Model: "gemini-pro", // Correct model name without the "models/" prefix
+		Model: "models/gemini-2.0-flash-001",
 		Contents: []*pb.Content{
 			{
 				Parts: []*pb.Part{
