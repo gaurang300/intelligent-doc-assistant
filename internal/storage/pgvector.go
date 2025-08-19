@@ -65,9 +65,9 @@ func NewStore() *Store {
 
 func initSchema(db *sql.DB) error {
 	// Drop existing table
-	if _, err := db.Exec(DROP_TABLE_CODE_CHUNKS); err != nil {
-		return fmt.Errorf("failed to drop existing table: %w", err)
-	}
+	// if _, err := db.Exec(DROP_TABLE_CODE_CHUNKS); err != nil {
+	// 	return fmt.Errorf("failed to drop existing table: %w", err)
+	// }
 
 	// Create new table with proper vector support
 	if _, err := db.Exec(CREATE_TABLE_CODE_CHUNKS); err != nil {
