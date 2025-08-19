@@ -48,6 +48,52 @@ A smart documentation assistant that uses Google's Gemini AI to process, underst
    go mod download
    ```
 
+## Usage
+
+1. Start the server:
+   ```bash
+   go run cmd/server/main.go
+   ```
+
+2. Ingest your codebase:
+   ```bash
+   curl -X POST \
+     http://localhost:8080/ingest \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "repoPath": "/path/to/your/codebase"
+     }'
+   ```
+
+3. Ask questions about your codebase:
+   ```bash
+   curl -X POST \
+     http://localhost:8080/ask \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "question": "What does function X do?"
+     }'
+   ```
+
+The system works by:
+1. Breaking down your codebase into semantic chunks during ingestion
+2. Generating embeddings for each chunk using Gemini AI
+3. Storing these chunks and embeddings in PostgreSQL with pgvector extension
+4. When you ask a question:
+   - It generates an embedding for your question
+   - Searches for similar code chunks in the database
+   - Uses these relevant chunks to generate a contextualized answer using Gemini AI
+
+### Configuration
+
+The server expects the following environment variables:
+- `GEMINI_API_KEY`: Your Google Cloud Gemini API key
+- `DB_HOST`: PostgreSQL host (default: localhost)
+- `DB_PORT`: PostgreSQL port (default: 5432)
+- `DB_USER`: PostgreSQL username
+- `DB_PASSWORD`: PostgreSQL password
+- `DB_NAME`: PostgreSQL database name
+
 3. Set up PostgreSQL with pgvector:
    ```sql
    CREATE EXTENSION vector;

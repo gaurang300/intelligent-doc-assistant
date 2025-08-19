@@ -83,16 +83,16 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Search for relevant chunks
-	chunks, err := s.Storage.SearchChunks(r.Context(), req.Question)
+	searchResults, err := s.Storage.SearchChunks(r.Context(), req.Question)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to search code chunks")
 		return
 	}
 
-	// Generate answer using LLM
-	answer, err := s.LLM.GenerateAnswer(r.Context(), req.Question, chunks)
+	// Generate answer using LLM with search results
+	answer, err := s.LLM.GenerateAnswer(r.Context(), req.Question, searchResults)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to generate answer")
+		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

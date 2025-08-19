@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"intelligent-doc-assistant/config"
 	"intelligent-doc-assistant/internal/embeddings"
@@ -12,6 +13,21 @@ import (
 
 	_ "github.com/lib/pq"
 )
+
+// joinFloat32s converts a slice of float32 to a comma-separated string
+func joinFloat32s(v []float32) string {
+	s := make([]string, len(v))
+	for i, f := range v {
+		s[i] = fmt.Sprintf("%.6f", f)
+	}
+	return strings.Join(s, ",")
+}
+
+// SearchResult represents a search result with similarity score
+type SearchResult struct {
+	Chunk      parser.CodeChunk
+	Similarity float64
+}
 
 type Store struct {
 	db       *sql.DB
@@ -48,43 +64,84 @@ func NewStore() *Store {
 }
 
 func initSchema(db *sql.DB) error {
-	_, err := db.Exec(CREATE_TABLE_CODE_CHUNKS)
-	return err
-}
-
-func (s *Store) StoreChunks(ctx context.Context, chunks []parser.CodeChunk) error {
-	for _, chunk := range chunks {
-		// Generate embeddings for the chunk
-		text := fmt.Sprintf("%s\n%s", chunk.Name, chunk.Description)
-		embeddings, err := s.embedder.CreateEmbeddings([]string{text})
-		if err != nil {
-			return fmt.Errorf("failed to generate embeddings: %w", err)
-		}
-
-		if len(embeddings) == 0 {
-			return fmt.Errorf("no embeddings generated for chunk")
-		}
-
-		// Serialize chunk data
-		chunkData, err := json.Marshal(chunk)
-		if err != nil {
-			return fmt.Errorf("failed to marshal chunk: %w", err)
-		}
-
-		// Store chunk with its embedding
-		_, err = s.db.Exec(INSERT_CODE_CHUNK,
-			chunk.FilePath,
-			string(chunkData),
-			embeddings[0], // Use the first embedding since we only send one text
-		)
-		if err != nil {
-			return fmt.Errorf("failed to insert chunk: %w", err)
-		}
+	// Drop existing table
+	if _, err := db.Exec(DROP_TABLE_CODE_CHUNKS); err != nil {
+		return fmt.Errorf("failed to drop existing table: %w", err)
 	}
+
+	// Create new table with proper vector support
+	if _, err := db.Exec(CREATE_TABLE_CODE_CHUNKS); err != nil {
+		return fmt.Errorf("failed to create table: %w", err)
+	}
+
 	return nil
 }
 
-func (s *Store) SearchChunks(ctx context.Context, query string) ([]parser.CodeChunk, error) {
+func (s *Store) StoreChunks(ctx context.Context, chunks []parser.CodeChunk) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // will be ignored if tx.Commit() is called
+
+	stmt, err := tx.PrepareContext(ctx, INSERT_CODE_CHUNK)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, chunk := range chunks {
+		// Generate embeddings for the chunk
+		text := fmt.Sprintf("%s\n%s", chunk.Name, chunk.Description)
+		fmt.Printf("Generating embedding for chunk: %s\n", text) // Debug log
+
+		embeddings, err := s.embedder.CreateEmbeddings([]string{text})
+		if err != nil {
+			return fmt.Errorf("failed to generate embeddings for %s: %w", chunk.FilePath, err)
+		}
+
+		if len(embeddings) == 0 {
+			return fmt.Errorf("no embeddings generated for chunk in file %s", chunk.FilePath)
+		}
+
+		if len(embeddings[0]) != 768 {
+			return fmt.Errorf("unexpected embedding dimension %d for file %s", len(embeddings[0]), chunk.FilePath)
+		}
+
+		// Serialize chunk data as JSONB
+		chunkData, err := json.Marshal(chunk)
+		if err != nil {
+			return fmt.Errorf("failed to marshal chunk for file %s: %w", chunk.FilePath, err)
+		}
+
+		// Format embedding vector
+		embedding := Vector(embeddings[0])
+		encodedEmbedding := fmt.Sprintf("[%s]", joinFloat32s(embedding))
+
+		fmt.Printf("Inserting chunk for file: %s\n", chunk.FilePath) // Debug log
+		fmt.Printf("Chunk data length: %d bytes\n", len(chunkData))  // Debug log
+		fmt.Printf("Embedding length: %d values\n", len(embedding))  // Debug log
+
+		// Execute prepared statement
+		_, err = stmt.ExecContext(ctx,
+			chunk.FilePath,
+			chunkData, // Will be automatically cast to JSONB
+			encodedEmbedding,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert chunk for file %s: %w", chunk.FilePath, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Printf("Successfully stored %d chunks\n", len(chunks)) // Debug log
+	return nil
+}
+
+func (s *Store) SearchChunks(ctx context.Context, query string) ([]SearchResult, error) {
 	// Generate embedding for the query
 	embeddings, err := s.embedder.CreateEmbeddings([]string{query})
 	if err != nil {
@@ -96,26 +153,44 @@ func (s *Store) SearchChunks(ctx context.Context, query string) ([]parser.CodeCh
 	}
 
 	// Search for similar chunks
-	rows, err := s.db.Query(SEARCH_SIMILAR_CHUNKS, embeddings[0], 5) // Limit to top 5 most relevant chunks
+	embedding := Vector(embeddings[0])
+	encodedEmbedding := fmt.Sprintf("[%s]", joinFloat32s(embedding))
+
+	// Use prepared statement for better performance
+	stmt, err := s.db.PrepareContext(ctx, SEARCH_SIMILAR_CHUNKS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare search statement: %w", err)
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.QueryContext(ctx, encodedEmbedding, 5) // Top 5 most relevant chunks
 	if err != nil {
 		return nil, fmt.Errorf("failed to search chunks: %w", err)
 	}
 	defer rows.Close()
 
-	var chunks []parser.CodeChunk
+	var results []SearchResult
 	for rows.Next() {
-		var filePath, chunkData string
-		if err := rows.Scan(&filePath, &chunkData); err != nil {
+		var (
+			filePath   string
+			chunkData  []byte
+			similarity float64
+		)
+
+		if err := rows.Scan(&filePath, &chunkData, &similarity); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
 		var chunk parser.CodeChunk
-		if err := json.Unmarshal([]byte(chunkData), &chunk); err != nil {
+		if err := json.Unmarshal(chunkData, &chunk); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal chunk: %w", err)
 		}
 
-		chunks = append(chunks, chunk)
+		results = append(results, SearchResult{
+			Chunk:      chunk,
+			Similarity: similarity,
+		})
 	}
 
-	return chunks, nil
+	return results, nil
 }
